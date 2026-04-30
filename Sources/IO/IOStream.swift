@@ -134,7 +134,19 @@ open class IOStream: NSObject {
     /// Specifies the frame rate of a device capture.
     public var frameRate: Float64 {
         get {
-            return lockQueue.sync { self.mixer.videoIO.frameRate }
+            // Direct read instead of `lockQueue.sync`. Float64 reads are atomic
+            // on arm64; writes remain serialized via `lockQueue.async` below.
+            //
+            // Why: callers reading frameRate from the main thread (e.g.
+            // ApiVideoCameraPreview.initState → controller.videoSize → iOS
+            // plugin handler → liveStream.videoConfig.getter → here) would
+            // otherwise wait on lockQueue, which can be busy with
+            // attachCamera / AVCaptureSession.startRunning for several
+            // seconds during first-time camera bring-up. Verified via
+            // System Trace: a 9.02s severe main-thread hang showed
+            // kevent_id ← OS_dispatch_queue.sync ← videoConfig.getter as
+            // the call chain. Removing the sync eliminates the hang.
+            return mixer.videoIO.frameRate
         }
         set {
             lockQueue.async {
