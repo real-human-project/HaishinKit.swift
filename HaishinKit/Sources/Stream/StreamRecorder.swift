@@ -210,6 +210,9 @@ public actor StreamRecorder {
     ///     print(error)
     ///  }
     /// ```
+    ///
+    /// - Returns: The output URL after the asset writer completes successfully.
+    /// - Throws: `Error.failedToFinishWriting` if the writer cannot finish or does not reach `.completed`.
     public func stopRecording() async throws -> URL {
         guard isRecording else {
             throw Error.invalidState
@@ -227,6 +230,9 @@ public actor StreamRecorder {
             input.markAsFinished()
         }
         await writer.finishWriting()
+        guard writer.status == .completed else {
+            throw Error.failedToFinishWriting(error: writer.error)
+        }
         return writer.outputURL
     }
 
