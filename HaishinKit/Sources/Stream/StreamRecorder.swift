@@ -126,9 +126,14 @@ public actor StreamRecorder {
     private var audioPresentationTime: CMTime = .zero
     private var videoPresentationTime: CMTime = .zero
     private var dimensions: CMVideoDimensions = .init(width: 0, height: 0)
+    private var onFirstVideoAppend: (@Sendable (CMTime, TimeInterval) -> Void)?
 
-    /// Creates a new recorder.
-    public init() {
+    /// Creates a recorder, optionally observing its first successful video append.
+    ///
+    /// The observer runs synchronously on the recorder actor, once per instance,
+    /// with the sample presentation time and the transition's system uptime.
+    public init(onFirstVideoAppend: (@Sendable (CMTime, TimeInterval) -> Void)? = nil) {
+        self.onFirstVideoAppend = onFirstVideoAppend
     }
 
     /// Sets the movie fragment interval in sec.
@@ -291,6 +296,10 @@ public actor StreamRecorder {
             case .video:
                 if input.append(sampleBuffer) {
                     videoPresentationTime = sampleBuffer.presentationTimeStamp
+                    if let onFirstVideoAppend {
+                        self.onFirstVideoAppend = nil
+                        onFirstVideoAppend(sampleBuffer.presentationTimeStamp, ProcessInfo.processInfo.systemUptime)
+                    }
                 } else {
                     continuation?.yield(Error.failedToAppend(error: writer.error))
                 }

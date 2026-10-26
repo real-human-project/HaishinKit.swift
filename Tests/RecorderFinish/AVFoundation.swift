@@ -19,8 +19,9 @@ public let AVVideoWidthKey = "width"
 public let kAudioFormatMPEG4AAC = 1
 public struct CMTime: Sendable {
     public static let zero = Self()
-    public init() {}
-    public init(seconds: Double, preferredTimescale: Int32) {}
+    public let seconds: Double
+    public init() { seconds = 0 }
+    public init(seconds: Double, preferredTimescale: Int32) { self.seconds = seconds }
 }
 public struct CMVideoDimensions: Sendable {
     public let width: Int32
@@ -40,8 +41,11 @@ public final class CMFormatDescription {
 }
 public final class CMSampleBuffer: @unchecked Sendable {
     public let formatDescription: CMFormatDescription?
-    public var presentationTimeStamp: CMTime { .zero }
-    public init(_ mediaType: CMFormatDescription.MediaType) { formatDescription = CMFormatDescription(mediaType) }
+    public let presentationTimeStamp: CMTime
+    public init(_ mediaType: CMFormatDescription.MediaType, seconds: Double = 0) {
+        formatDescription = CMFormatDescription(mediaType)
+        presentationTimeStamp = CMTime(seconds: seconds, preferredTimescale: 600)
+    }
 }
 public class AVAudioBuffer {}
 public final class AVAudioTime {}
@@ -70,9 +74,16 @@ public final class AVAssetWriter: @unchecked Sendable {
     public func add(_ input: AVAssetWriterInput) { inputs.append(input) }
 }
 public final class AVAssetWriterInput {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var _appendCount = 0
+    nonisolated(unsafe) public static var appendResult = true
+    public static var appendCount: Int { lock.withLock { _appendCount } }
     public var expectsMediaDataInRealTime = false
     public var isReadyForMoreMediaData = true
     public init(mediaType: AVMediaType, outputSettings: [String: Any], sourceFormatHint: CMFormatDescription?) {}
     public func markAsFinished() {}
-    public func append(_ sampleBuffer: CMSampleBuffer) -> Bool { true }
+    public func append(_ sampleBuffer: CMSampleBuffer) -> Bool {
+        Self.lock.withLock { Self._appendCount += 1 }
+        return Self.appendResult
+    }
 }

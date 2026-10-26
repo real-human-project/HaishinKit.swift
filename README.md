@@ -93,6 +93,20 @@ Please make sure to contains `Info.plist` the following values when accessing th
 <string>your usage description here</string>
 ```
 
+## First video observations
+
+`StreamRecorder(onFirstVideoAppend:)` optionally reports the first successful
+video append, once per recorder instance. Failed appends do not consume it.
+`RTMPStream.setFirstVideoOutputObserver(_:)` optionally reports the next encoded
+video frame message submitted to RTMP output, excluding codec configuration.
+The stream observer fires once; setting it again starts another observation
+window, and passing `nil` disables it.
+
+Both callbacks receive the frame's `CMTime` presentation timestamp and the
+transition's `ProcessInfo.systemUptime` in seconds. They run synchronously on
+their owning actor, so observers must return promptly. RTMP output submission
+does not establish socket-send completion or server receipt.
+
 ## 📃 Documentation
 - [API Documentation](https://docs.haishinkit.com/swift/latest/documentation/)
 - [Migration Guide](https://github.com/HaishinKit/HaishinKit.swift/wiki#-migration-guide)
