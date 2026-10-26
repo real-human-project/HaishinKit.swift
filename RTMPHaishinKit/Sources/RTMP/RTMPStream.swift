@@ -228,6 +228,7 @@ public actor RTMPStream {
     package lazy var incoming = IncomingStream(self)
     package lazy var outgoing = OutgoingStream()
     private weak var connection: RTMPConnection?
+    private var onFirstVideoOutput: (@Sendable (CMTime, TimeInterval) -> Void)?
 
     private var audioFormat: AVAudioFormat? {
         didSet {
@@ -545,6 +546,17 @@ public actor RTMPStream {
         try await pause(!isPaused)
     }
 
+    /// Observes the next encoded video frame message submitted to this stream's
+    /// RTMP output, excluding codec configuration messages.
+    ///
+    /// The observer runs synchronously on the stream actor with the frame's
+    /// presentation time and the transition's system uptime. It fires once;
+    /// setting it again starts another observation window. This is not a
+    /// socket-send completion or a server acknowledgement.
+    public func setFirstVideoOutputObserver(_ observer: (@Sendable (CMTime, TimeInterval) -> Void)?) {
+        onFirstVideoOutput = observer
+    }
+
     func doOutput(_ type: RTMPChunkType, chunkStreamId: RTMPChunkStreamId, message: some RTMPMessage) {
         Task {
             let length = await connection?.doOutput(type, chunkStreamId: chunkStreamId, message: message) ?? 0
@@ -736,6 +748,10 @@ extension RTMPStream: _Stream {
                         return
                     }
                     doOutput(.one, chunkStreamId: .video, message: message)
+                    if let onFirstVideoOutput {
+                        self.onFirstVideoOutput = nil
+                        onFirstVideoOutput(sampleBuffer.presentationTimeStamp, ProcessInfo.processInfo.systemUptime)
+                    }
                 } catch {
                     logger.warn(error)
                 }
