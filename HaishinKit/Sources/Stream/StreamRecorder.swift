@@ -123,8 +123,8 @@ public actor StreamRecorder {
         }
     }
     private var writerInputs: [AVMediaType: AVAssetWriterInput] = [:]
-    private var audioPresentationTime: CMTime = .zero
-    private var videoPresentationTime: CMTime = .zero
+    private var audioPresentationTime: CMTime = .invalid
+    private var videoPresentationTime: CMTime = .invalid
     private var dimensions: CMVideoDimensions = .init(width: 0, height: 0)
     private var onFirstVideoAppend: (@Sendable (CMTime, TimeInterval) -> Void)?
 
@@ -193,8 +193,8 @@ public actor StreamRecorder {
         if let movieFragmentInterval {
             writer?.movieFragmentInterval = CMTime(seconds: movieFragmentInterval, preferredTimescale: 1)
         }
-        videoPresentationTime = .zero
-        audioPresentationTime = .zero
+        videoPresentationTime = .invalid
+        audioPresentationTime = .invalid
         self.settings = settings
 
         isRecording = true
@@ -265,7 +265,7 @@ public actor StreamRecorder {
         return url.pathExtension.isEmpty ? url.appendingPathComponent(UUID().uuidString).appendingPathExtension(Self.defaultPathExtension) : url
     }
 
-    private func append(_ sampleBuffer: CMSampleBuffer) {
+    func append(_ sampleBuffer: CMSampleBuffer) {
         guard isRecording else {
             return
         }
@@ -286,14 +286,21 @@ public actor StreamRecorder {
         }
 
         if input.isReadyForMoreMediaData {
+            // Tasks delivering samples can arrive out of order. Only advance after a successful append.
             switch mediaType {
             case .audio:
+                guard !audioPresentationTime.isValid || audioPresentationTime < sampleBuffer.presentationTimeStamp else {
+                    return
+                }
                 if input.append(sampleBuffer) {
                     audioPresentationTime = sampleBuffer.presentationTimeStamp
                 } else {
                     continuation?.yield(Error.failedToAppend(error: writer.error))
                 }
             case .video:
+                guard !videoPresentationTime.isValid || videoPresentationTime < sampleBuffer.presentationTimeStamp else {
+                    return
+                }
                 if input.append(sampleBuffer) {
                     videoPresentationTime = sampleBuffer.presentationTimeStamp
                     if let onFirstVideoAppend {
