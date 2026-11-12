@@ -80,8 +80,60 @@ final class FirstAppendObservations: @unchecked Sendable {
         precondition(observations.snapshot.count == 1, "observer is once per recorder instance")
         _ = try await recorder.stopRecording()
         print("first successful video append: once, successful frame PTS, transition uptime PASS")
+        failures += try await checkWriterFailure(root)
         print("actual-source recorder contract failures: \(failures)")
         if failures > 0 { exit(1) }
+    }
+
+    private static func checkWriterFailure(_ root: URL) async throws -> Int {
+        var failures = 0
+        for mediaType in [AVMediaType.audio, .video] {
+            let recorder = StreamRecorder()
+            // Reusing the recorder also checks that the failure latch resets.
+            for (index, status) in [AVAssetWriter.Status.writing, .failed, .failed].enumerated() {
+                AVAssetWriter.nextInitialStatus = .unknown
+                AVAssetWriter.nextFinalStatus = .completed
+                try await recorder.startRecording(
+                    root.appendingPathComponent("failure-\(mediaType.rawValue)-\(index).mp4"),
+                    settings: [mediaType: StreamRecorder.defaultSettings[mediaType]!]
+                )
+                let errors = await recorder.error
+                let sampleType: CMFormatDescription.MediaType = mediaType == .video ? .video : .audio
+                await recorder.append(CMSampleBuffer(sampleType, seconds: 0))
+                let writer = AVAssetWriter.latest!
+                precondition(writer.status == .writing)
+                precondition(writer.inputs.count == 1)
+                writer.inputs[0].isReadyForMoreMediaData = false
+                writer.status = status
+                let appendCount = AVAssetWriterInput.appendCount
+                for timestamp in 1...4 {
+                    await recorder.append(CMSampleBuffer(sampleType, seconds: Double(timestamp)))
+                }
+                precondition(AVAssetWriterInput.appendCount == appendCount, "busy input must not append")
+                // Close this error stream before stopRecording, so stop cannot supply the event.
+                _ = await recorder.error
+                var errorCount = 0
+                for await error in errors {
+                    guard case .failedToAppend(let underlying) = error else {
+                        preconditionFailure("unexpected recorder error: \(error)")
+                    }
+                    precondition((underlying as NSError?)?.domain == "FixtureWriter")
+                    precondition((underlying as NSError?)?.code == 1)
+                    errorCount += 1
+                }
+                let expected = status == .failed ? 1 : 0
+                let matches = errorCount == expected
+                if !matches { failures += 1 }
+                print("\(mediaType.rawValue) \(status) input-not-ready: errors=\(errorCount) expected=\(expected) \(matches ? "PASS" : "FAIL")")
+                do {
+                    _ = try await recorder.stopRecording()
+                    precondition(status == .writing)
+                } catch StreamRecorder.Error.failedToFinishWriting {
+                    precondition(status == .failed)
+                }
+            }
+        }
+        return failures
     }
 
     private static func append(
