@@ -5,7 +5,7 @@ fixtures=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo=$(cd -- "$fixtures/../.." && pwd)
 source=${1:-"$repo/HaishinKit/Sources/Stream/StreamRecorder.swift"}
 build_dir=$(mktemp -d /tmp/agent.haishinkit.recorder-finish.XXXXXX)
-trap 'rm -r -- "$build_dir"' EXIT
+trap '/usr/bin/trash -v -s "$build_dir"' EXIT
 
 # This controlled SDK boundary never enters the package's real SDK build.
 xcrun swiftc -swift-version 6 -module-cache-path "$build_dir/module-cache" \

@@ -17,11 +17,14 @@ public let AVVideoCodecKey = "codec"
 public let AVVideoHeightKey = "height"
 public let AVVideoWidthKey = "width"
 public let kAudioFormatMPEG4AAC = 1
-public struct CMTime: Sendable {
+public struct CMTime: Sendable, Comparable {
     public static let zero = Self()
+    public static let invalid = Self(seconds: .nan, preferredTimescale: 1)
     public let seconds: Double
+    public var isValid: Bool { !seconds.isNaN }
     public init() { seconds = 0 }
     public init(seconds: Double, preferredTimescale: Int32) { self.seconds = seconds }
+    public static func < (lhs: Self, rhs: Self) -> Bool { lhs.seconds < rhs.seconds }
 }
 public struct CMVideoDimensions: Sendable {
     public let width: Int32
@@ -56,6 +59,7 @@ public final class AVAssetWriter: @unchecked Sendable {
     public enum Status: String { case unknown, writing, completed, failed, cancelled }
     nonisolated(unsafe) public static var nextInitialStatus: Status = .unknown
     nonisolated(unsafe) public static var nextFinalStatus: Status = .completed
+    nonisolated(unsafe) public static var latest: AVAssetWriter?
     public let outputURL: URL
     public var status: Status
     public var error: (any Error)? { status == .failed ? NSError(domain: "FixtureWriter", code: 1) : nil }
@@ -66,6 +70,7 @@ public final class AVAssetWriter: @unchecked Sendable {
         self.outputURL = outputURL
         status = Self.nextInitialStatus
         finalStatus = Self.nextFinalStatus
+        Self.latest = self
     }
     public func finishWriting() async { status = finalStatus }
     public func startWriting() { status = .writing }

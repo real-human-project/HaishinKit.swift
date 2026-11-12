@@ -86,6 +86,9 @@ public actor StreamRecorder {
         return writer?.outputURL
     }
     /// The current error.
+    ///
+    /// A failed append or writer yields `Error.failedToAppend` once per recording.
+    /// A busy input on a writing asset writer does not yield an error.
     public var error: AsyncStream<StreamRecorder.Error> {
         AsyncStream { continuation in
             self.continuation = continuation
@@ -123,8 +126,9 @@ public actor StreamRecorder {
         }
     }
     private var writerInputs: [AVMediaType: AVAssetWriterInput] = [:]
-    private var audioPresentationTime: CMTime = .zero
-    private var videoPresentationTime: CMTime = .zero
+    private var hasReportedAppendFailure = false
+    private var audioPresentationTime: CMTime = .invalid
+    private var videoPresentationTime: CMTime = .invalid
     private var dimensions: CMVideoDimensions = .init(width: 0, height: 0)
     private var onFirstVideoAppend: (@Sendable (CMTime, TimeInterval) -> Void)?
 
@@ -193,8 +197,9 @@ public actor StreamRecorder {
         if let movieFragmentInterval {
             writer?.movieFragmentInterval = CMTime(seconds: movieFragmentInterval, preferredTimescale: 1)
         }
-        videoPresentationTime = .zero
-        audioPresentationTime = .zero
+        videoPresentationTime = .invalid
+        audioPresentationTime = .invalid
+        hasReportedAppendFailure = false
         self.settings = settings
 
         isRecording = true
@@ -265,13 +270,16 @@ public actor StreamRecorder {
         return url.pathExtension.isEmpty ? url.appendingPathComponent(UUID().uuidString).appendingPathExtension(Self.defaultPathExtension) : url
     }
 
-    private func append(_ sampleBuffer: CMSampleBuffer) {
-        guard isRecording else {
+    func append(_ sampleBuffer: CMSampleBuffer) {
+        guard isRecording, let writer else {
+            return
+        }
+        if writer.status == .failed {
+            reportAppendFailure(writer)
             return
         }
         let mediaType: AVMediaType = (sampleBuffer.formatDescription?.mediaType == .video) ? .video : .audio
         guard
-            let writer,
             let input = makeWriterInput(mediaType, sourceFormatHint: sampleBuffer.formatDescription),
             isReadyForStartWriting else {
             return
@@ -280,20 +288,31 @@ public actor StreamRecorder {
         switch writer.status {
         case .unknown:
             writer.startWriting()
+            guard writer.status != .failed else {
+                reportAppendFailure(writer)
+                return
+            }
             writer.startSession(atSourceTime: sampleBuffer.presentationTimeStamp)
         default:
             break
         }
 
         if input.isReadyForMoreMediaData {
+            // Tasks delivering samples can arrive out of order. Only advance after a successful append.
             switch mediaType {
             case .audio:
+                guard !audioPresentationTime.isValid || audioPresentationTime < sampleBuffer.presentationTimeStamp else {
+                    return
+                }
                 if input.append(sampleBuffer) {
                     audioPresentationTime = sampleBuffer.presentationTimeStamp
                 } else {
-                    continuation?.yield(Error.failedToAppend(error: writer.error))
+                    reportAppendFailure(writer)
                 }
             case .video:
+                guard !videoPresentationTime.isValid || videoPresentationTime < sampleBuffer.presentationTimeStamp else {
+                    return
+                }
                 if input.append(sampleBuffer) {
                     videoPresentationTime = sampleBuffer.presentationTimeStamp
                     if let onFirstVideoAppend {
@@ -301,12 +320,20 @@ public actor StreamRecorder {
                         onFirstVideoAppend(sampleBuffer.presentationTimeStamp, ProcessInfo.processInfo.systemUptime)
                     }
                 } else {
-                    continuation?.yield(Error.failedToAppend(error: writer.error))
+                    reportAppendFailure(writer)
                 }
             default:
                 break
             }
         }
+    }
+
+    private func reportAppendFailure(_ writer: AVAssetWriter) {
+        guard !hasReportedAppendFailure else {
+            return
+        }
+        hasReportedAppendFailure = true
+        continuation?.yield(Error.failedToAppend(error: writer.error))
     }
 
     private func makeWriterInput(_ mediaType: AVMediaType, sourceFormatHint: CMFormatDescription?) -> AVAssetWriterInput? {
